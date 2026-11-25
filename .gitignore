@@ -1,0 +1,47 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Models (large files)
+backend/models/*.onnx
+backend/models/*.pth
+backend/models/*.pt
+
+# Uploads & outputs (user data)
+backend/uploads/*
+backend/outputs/*
+backend/temp/*
+backend/logs/*
+!backend/uploads/.gitkeep
+!backend/outputs/.gitkeep
+!backend/temp/.gitkeep
+temp_test_video.mp4
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env files
+.env
+.env.local

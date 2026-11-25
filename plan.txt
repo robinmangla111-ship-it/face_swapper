@@ -1,0 +1,619 @@
+================================================================================
+                    FACE SWAPPER TOOL — PRODUCTION PLAN
+================================================================================
+Created: 2026-11-22
+Status:  DRAFT — Awaiting approval before implementation
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1.  Project Overview & Goals
+2.  System Requirements & Current Machine Assessment
+3.  Architecture Overview
+4.  Technology Stack (Detailed)
+5.  Core Pipeline — How Face Swapping Works
+6.  Feature Breakdown (Modules)
+7.  Multi-Threading / Chunked Video Strategy
+8.  Quality Preservation Strategy
+9.  Deployment Options (Free GPU Infrastructure)
+10. Project Structure
+11. Implementation Phases & Order
+12. Risk Mitigation & Edge Cases
+13. Licensing & Ethics
+
+================================================================================
+1. PROJECT OVERVIEW & GOALS
+================================================================================
+Build a production-ready face swapping web application that:
+  ✓ Accepts video upload (any common format: MP4, AVI, MOV, MKV, WebM)
+  ✓ Auto-detects all unique faces/characters in the video
+  ✓ Lets the user select WHICH character's face to swap
+  ✓ Accepts a source face image (the face to paste in)
+  ✓ Produces a high-quality output video with:
+      - Swapped face that blends naturally (color, lighting, skin tone)
+      - Original audio preserved perfectly (no distortion)
+      - Original video resolution & FPS maintained
+      - No flickering or temporal artifacts between frames
+  ✓ Handles long videos efficiently via chunked parallel processing
+  ✓ Runs locally on the user's Windows machine (no GPU required, but GPU accelerated if available)
+  ✓ Can also be deployed to free cloud GPU infrastructure (Hugging Face Spaces)
+
+================================================================================
+2. SYSTEM REQUIREMENTS & CURRENT MACHINE ASSESSMENT
+================================================================================
+Current machine:
+  - OS:        Windows
+  - Python:    3.12.10 ✓
+  - Node.js:   v22.21.0 ✓
+  - npm:       10.9.4 ✓
+  - FFmpeg:    NOT INSTALLED ✗ (must install)
+  - GPU/CUDA:  nvidia-smi not found — likely NO dedicated NVIDIA GPU
+               → Will use CPU execution with onnxruntime (slower but works)
+               → If GPU exists but drivers aren't in PATH, we'll detect & fix
+               → Cloud deployment on HF Spaces gives us free GPU (ZeroGPU)
+
+Minimum requirements:
+  - Python 3.9+
+  - 8GB RAM (16GB recommended for video processing)
+  - FFmpeg (we will install via pip/choco or bundle it)
+  - ~2GB disk for AI models (inswapper_128 + buffalo_l + GFPGAN)
+
+================================================================================
+3. ARCHITECTURE OVERVIEW
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                        USER'S BROWSER                              │
+│                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │ Upload Video  │  │ Select Face  │  │ Upload Source Face Image │  │
+│  └──────┬───────┘  └──────┬───────┘  └────────────┬─────────────┘  │
+│         │                 │                        │                │
+│         └─────────────────┼────────────────────────┘                │
+│                           │                                         │
+│                    WebSocket (Progress Updates)                     │
+└───────────────────────────┼─────────────────────────────────────────┘
+                            │
+                    ┌───────▼────────┐
+                    │  Next.js App   │
+                    │  (Frontend)    │
+                    │  Port 3000     │
+                    └───────┬────────┘
+                            │  REST API + WebSocket
+                    ┌───────▼────────┐
+                    │  FastAPI        │
+                    │  (Backend)      │
+                    │  Port 8000      │
+                    └───────┬────────┘
+                            │
+              ┌─────────────┼──────────────────┐
+              │             │                  │
+     ┌────────▼───────┐ ┌───▼──────────┐ ┌────▼──────────┐
+     │ Face Detection │ │ Face Swap    │ │ Face Enhance  │
+     │ (InsightFace   │ │ (inswapper   │ │ (GFPGAN /     │
+     │  buffalo_l)    │ │  _128.onnx)  │ │  CodeFormer)  │
+     └────────────────┘ └──────────────┘ └───────────────┘
+              │
+     ┌────────▼───────────────────┐
+     │ FFmpeg                      │
+     │ - Extract audio             │
+     │ - Split video into chunks   │
+     │ - Merge processed chunks    │
+     │ - Mux audio + video         │
+     └────────────────────────────┘
+
+ALTERNATIVE ARCHITECTURE (Simpler — for HF Spaces deployment):
+  → Single Gradio app.py that does everything
+  → Uses @spaces.GPU decorator for free GPU on Hugging Face
+  → Can also run locally with `python app.py`
+
+DECISION: We will build BOTH:
+  (A) A full Next.js + FastAPI app for local/production use
+  (B) A Gradio app.py for instant Hugging Face Spaces deployment
+
+They share the same Python processing core (a reusable module).
+
+================================================================================
+4. TECHNOLOGY STACK (DETAILED)
+================================================================================
+
+BACKEND (Python):
+  ├── FastAPI           — High-performance async API server
+  ├── insightface       — Face detection + recognition (buffalo_l model)
+  ├── onnxruntime       — ONNX model inference (CPU; onnxruntime-gpu for CUDA)
+  ├── inswapper_128     — Face swapping model (ONNX format)
+  ├── gfpgan            — Face enhancement/restoration after swap
+  ├── opencv-python     — Frame extraction, image processing
+  ├── ffmpeg-python     — Python wrapper for FFmpeg (audio/video muxing)
+  ├── numpy             — Array operations
+  ├── python-multipart  — File upload handling
+  ├── websockets        — Real-time progress updates
+  ├── scikit-image      — Color correction / histogram matching
+  ├── Pillow            — Image format conversions
+  └── uvicorn           — ASGI server
+
+FRONTEND (Next.js):
+  ├── Next.js 14+       — React framework with App Router
+  ├── TypeScript        — Type safety
+  ├── Tailwind CSS      — Styling
+  ├── shadcn/ui         — UI components
+  ├── react-dropzone    — File upload drag & drop
+  ├── socket.io-client  — WebSocket for progress
+  └── Lucide icons      — UI icons
+
+INFRASTRUCTURE:
+  ├── FFmpeg            — Video/audio processing (must install)
+  ├── Gradio            — Alternative UI for HF Spaces deployment
+  └── Docker (optional) — Containerization
+
+MODELS (all free, downloaded automatically):
+  ├── buffalo_l         — InsightFace face analysis pack (~330MB)
+  │   ├── det_10g.onnx  — Face detection (RetinaFace/SCRFD)
+  │   ├── 2d106det.onnx — 2D landmark detection
+  │   ├── w600k_r50.onnx — Face recognition (ArcFace)
+  │   └── genderage.onnx — Gender/age estimation
+  ├── inswapper_128.onnx — Face swapper model (~550MB)
+  └── GFPGANv1.4.pth   — Face restoration model (~350MB)
+
+================================================================================
+5. CORE PIPELINE — HOW FACE SWAPPING WORKS
+================================================================================
+
+Step-by-step processing pipeline:
+
+  INPUT: target_video.mp4 + source_face.jpg + selected_character_index
+
+  1. EXTRACT AUDIO
+     └── FFmpeg extracts original audio track → audio.aac
+         (preserves exact codec, bitrate, channels — zero re-encoding)
+
+  2. FACE DISCOVERY (runs once on a sample of frames)
+     ├── Sample N frames evenly across the video (e.g., every 30th frame)
+     ├── Run InsightFace detection on each sampled frame
+     ├── Cluster detected faces by embedding similarity (ArcFace)
+     ├── Group into unique "characters" (Person A, Person B, etc.)
+     ├── Generate a thumbnail/avatar for each character
+     └── Return character list to frontend for user selection
+
+  3. USER SELECTS TARGET CHARACTER
+     └── "Swap Person B's face with my uploaded face"
+
+  4. VIDEO CHUNKING (for parallel processing)
+     ├── Calculate total frames & duration
+     ├── Split into N chunks (N = number of CPU cores, or configurable)
+     ├── Each chunk = a range of frame indices
+     └── Assign chunks to worker threads/processes
+
+  5. PER-FRAME FACE SWAP (runs in parallel across chunks)
+     For each frame in assigned chunk:
+       a. Detect all faces in frame (InsightFace)
+       b. For each detected face:
+          - Compute face embedding
+          - Compare with selected character's reference embedding
+          - If similarity > threshold (cosine distance < 0.6):
+              → Apply inswapper_128 to swap the face
+              → Apply GFPGAN enhancement to restore quality
+              → Color-correct to match surrounding skin/lighting
+       c. Write processed frame to output
+
+  6. MERGE CHUNKS
+     └── Concatenate all processed chunk outputs in order
+
+  7. MUX AUDIO + VIDEO
+     └── FFmpeg combines processed video + original audio
+         → Final output: output_swapped.mp4
+
+  8. CLEANUP
+     └── Delete temporary frames, chunks, intermediate files
+
+================================================================================
+6. FEATURE BREAKDOWN (MODULES)
+================================================================================
+
+MODULE 1: Video Upload & Validation
+  - Accept MP4, AVI, MOV, MKV, WebM (up to 500MB locally, 100MB for cloud)
+  - Validate video integrity (can FFmpeg read it?)
+  - Extract metadata: resolution, FPS, duration, codec
+  - Generate a preview thumbnail
+
+MODULE 2: Face Discovery & Character Selection
+  - Smart sampling: analyze ~1 frame per second
+  - Face detection with InsightFace SCRFD
+  - Face embedding extraction with ArcFace (512-dim vectors)
+  - Clustering with cosine similarity + simple agglomerative grouping
+  - Generate character cards: thumbnail, face crop, label
+  - Frontend displays character grid for selection
+
+MODULE 3: Source Face Upload
+  - Accept JPG, PNG face image
+  - Validate: at least 1 face detected
+  - Extract & store face embedding for matching
+  - Show preview of detected face crop
+
+MODULE 4: Face Swap Engine (Core)
+  - Load inswapper_128.onnx model
+  - Per-frame processing:
+    1. Detect faces
+    2. Match target character by embedding similarity
+    3. Swap face using inswapper
+    4. Apply face mask blending (seamless clone / Poisson blending)
+  - Handle edge cases:
+    - Frame with no faces → pass through unchanged
+    - Target face occluded/partial → skip swap for that frame
+    - Multiple faces in frame → only swap the matched character
+
+MODULE 5: Face Enhancement
+  - GFPGAN v1.4 for post-swap face restoration
+  - Fixes: blur, artifacts, resolution mismatch
+  - Color correction: match swapped face color to surrounding skin
+  - Feathered blending at face boundary (no hard edges)
+
+MODULE 6: Video Assembly
+  - FFmpeg-based reassembly
+  - Preserve original: FPS, resolution, pixel aspect ratio
+  - Audio track: copy original stream (no re-encoding audio)
+  - Video codec: H.264 (libx264) with CRF 18 for high quality
+  - Container: MP4
+
+MODULE 7: Progress & Status
+  - WebSocket connection for real-time updates
+  - Report: current frame / total frames, estimated time remaining
+  - Per-chunk progress aggregation
+  - Error reporting with retry hints
+
+MODULE 8: Multi-Thread / Chunk Manager
+  - Configurable worker count (default: CPU cores - 1)
+  - Video split strategy: by frame ranges (not file splitting)
+  - Shared model instances where possible (reduce memory)
+  - Progress aggregation from all workers
+  - Graceful error handling (if one chunk fails, retry it)
+
+================================================================================
+7. MULTI-THREADING / CHUNKED VIDEO STRATEGY
+================================================================================
+
+PROBLEM: A 10-minute 30fps video = 18,000 frames
+         Processing each frame takes ~0.3-1.0 sec on CPU
+         Sequential = 1.5 - 5 hours → UNACCEPTABLE
+
+SOLUTION: Parallel chunk processing with multiprocessing
+
+Strategy:
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    Video: 18,000 frames                     │
+  │                                                             │
+  │  Chunk 1          Chunk 2          Chunk 3          Chunk 4 │
+  │  Frames 0-4499    Frames 4500-8999 Frames 9000-13499 14999  │
+  │       │                │                │             │     │
+  │  ┌────▼───┐       ┌────▼───┐       ┌────▼───┐   ┌────▼───┐ │
+  │  │Worker 1│       │Worker 2│       │Worker 3│   │Worker 4│ │
+  │  │(Process)│      │(Process)│      │(Process)│  │(Process)│ │
+  │  └────┬───┘       └────┬───┘       └────┬───┘   └────┬───┘ │
+  │       │                │                │             │     │
+  │  chunk_1.mp4      chunk_2.mp4      chunk_3.mp4   chunk_4.mp4│
+  │       │                │                │             │     │
+  │       └────────────────┼────────────────┼─────────────┘     │
+  │                        │                                     │
+  │                 FFmpeg concat                                │
+  │                        │                                     │
+  │                  output.mp4                                  │
+  └─────────────────────────────────────────────────────────────┘
+
+Implementation details:
+  - Use Python `multiprocessing.Pool` (not threading — bypass GIL)
+  - Each worker loads its own model instance (onnxruntime is not thread-safe)
+  - Frame ranges are passed as (start_frame, end_frame) tuples
+  - Each worker reads frames directly from source video using cv2.VideoCapture
+    with seek (cap.set(cv2.CAP_PROP_POS_FRAMES, start))
+  - Each worker writes its chunk as a temporary video file
+  - Main process concatenates chunks with FFmpeg concat demuxer
+  - Memory management: workers process frames in mini-batches of ~100
+
+For machines with GPU:
+  - Use onnxruntime-gpu with CUDA ExecutionProvider
+  - Single GPU = 1 worker with batch frame processing
+  - Multi-GPU = 1 worker per GPU (--execution-device-ids)
+
+Adaptive chunk sizing:
+  - Short video (<500 frames):  1 chunk (no overhead)
+  - Medium video (500-5000):    min(4, cpu_count) chunks
+  - Long video (5000+):         cpu_count chunks
+
+================================================================================
+8. QUALITY PRESERVATION STRATEGY
+================================================================================
+
+A. VIDEO QUALITY:
+   - Use FFmpeg with H.264 CRF 18 (visually lossless)
+   - Preserve original resolution (no downscaling at any step)
+   - Match original FPS exactly
+   - Use same pixel format (usually yuv420p)
+   - Keyframe interval matches original
+
+B. AUDIO QUALITY:
+   - NEVER re-encode audio — use `ffmpeg -c:a copy`
+   - Extract audio stream before processing
+   - Mux back after video processing
+   - Verify audio/video sync (match duration exactly)
+   - Support multiple audio tracks (copy all)
+
+C. FACE SWAP QUALITY:
+   - GFPGAN enhancement on every swapped face
+   - Color correction via histogram matching (source skin → target skin)
+   - Feathered mask blending (Gaussian blur on face mask boundary)
+   - Face landmark alignment (68-point or 106-point for precise mapping)
+   - Temporal smoothing: average face landmarks across adjacent frames
+     to prevent jittering/flickering
+
+D. EDGE CASE HANDLING:
+   - Partial face (occluded by hand/object): reduce blend opacity or skip
+   - Side profile (>45° angle): skip swap to avoid distortion
+   - Very small face (<40px): skip swap (insufficient detail)
+   - Multiple matching faces: use spatial consistency (track position)
+   - Lighting changes: per-frame color adaptation
+
+================================================================================
+9. DEPLOYMENT OPTIONS (FREE GPU INFRASTRUCTURE)
+================================================================================
+
+OPTION A: LOCAL DEPLOYMENT (Primary — your machine)
+  - Run FastAPI backend + Next.js frontend locally
+  - Processing on CPU (slower but works without GPU)
+  - Best for: privacy, no upload limits, full control
+  - Setup: `pip install -r requirements.txt && npm install && npm run dev`
+
+OPTION B: HUGGING FACE SPACES with ZeroGPU (Recommended Cloud)
+  - FREE tier with dynamic GPU allocation (H200/T4)
+  - Gradio-based UI (simpler but functional)
+  - @spaces.GPU decorator → GPU only during inference
+  - Limitations: ~72-second GPU timeout per request, queue-based
+  - Best for: demo/showcase, sharing with others
+  - Deploy: Push to HF repo, auto-builds
+
+OPTION C: GOOGLE COLAB (Free GPU for processing)
+  - Use as a remote processing backend
+  - T4 GPU free tier (limited hours/day)
+  - Frontend runs locally, calls Colab via ngrok tunnel
+  - Best for: getting GPU acceleration without cloud costs
+
+OPTION D: VERCEL + EXTERNAL GPU API
+  - Vercel: host the Next.js frontend (free tier)
+  - Backend: Hugging Face Inference API or Replicate API
+  - Vercel serverless functions proxy requests to GPU backend
+  - Best for: scalable web deployment
+  - Note: Vercel has no GPU, so backend MUST be external
+
+RECOMMENDED STRATEGY:
+  → Phase 1: Build & test locally (Option A)
+  → Phase 2: Deploy Gradio version to HF Spaces (Option B) 
+  → Phase 3: Deploy frontend to Vercel + HF backend API (Option D)
+
+================================================================================
+10. PROJECT STRUCTURE
+================================================================================
+
+face_swapper/
+├── README.md                        # Project documentation
+├── plan.txt                         # This plan file
+│
+├── backend/                         # Python FastAPI backend
+│   ├── main.py                      # FastAPI app entry point
+│   ├── requirements.txt             # Python dependencies
+│   ├── config.py                    # Configuration & constants
+│   │
+│   ├── core/                        # Core face swap engine
+│   │   ├── __init__.py
+│   │   ├── face_detector.py         # Face detection & embedding
+│   │   ├── face_swapper.py          # Face swap logic (inswapper)
+│   │   ├── face_enhancer.py         # GFPGAN enhancement
+│   │   ├── face_matcher.py          # Character matching/clustering
+│   │   ├── video_processor.py       # Frame extraction & assembly
+│   │   ├── chunk_manager.py         # Multi-process chunk manager
+│   │   ├── color_corrector.py       # Color/lighting correction
+│   │   └── pipeline.py              # Orchestrates the full pipeline
+│   │
+│   ├── api/                         # API routes
+│   │   ├── __init__.py
+│   │   ├── upload.py                # Video/image upload endpoints
+│   │   ├── faces.py                 # Face detection & selection
+│   │   ├── swap.py                  # Trigger swap & get results
+│   │   ├── progress.py              # WebSocket progress updates
+│   │   └── download.py              # Download processed video
+│   │
+│   ├── models/                      # AI model files (auto-downloaded)
+│   │   ├── .gitkeep
+│   │   └── download_models.py       # Script to pre-download models
+│   │
+│   ├── uploads/                     # Uploaded files (temp)
+│   ├── outputs/                     # Processed outputs
+│   └── temp/                        # Temporary processing files
+│
+├── frontend/                        # Next.js frontend
+│   ├── package.json
+│   ├── next.config.js
+│   ├── tailwind.config.ts
+│   ├── tsconfig.json
+│   │
+│   ├── app/                         # Next.js App Router
+│   │   ├── layout.tsx               # Root layout
+│   │   ├── page.tsx                 # Home page (main UI)
+│   │   ├── globals.css              # Global styles
+│   │   └── api/                     # API route proxies (optional)
+│   │
+│   ├── components/                  # React components
+│   │   ├── VideoUploader.tsx        # Drag & drop video upload
+│   │   ├── FaceSelector.tsx         # Character selection grid
+│   │   ├── SourceFaceUpload.tsx     # Source face upload
+│   │   ├── ProcessingStatus.tsx     # Progress bar & status
+│   │   ├── VideoPreview.tsx         # Before/after video preview
+│   │   ├── Header.tsx               # App header
+│   │   └── Footer.tsx               # App footer
+│   │
+│   ├── lib/                         # Utilities
+│   │   ├── api.ts                   # API client
+│   │   ├── websocket.ts            # WebSocket client
+│   │   └── utils.ts                # Helpers
+│   │
+│   └── public/                      # Static assets
+│       └── logo.svg
+│
+├── gradio_app/                      # Gradio version for HF Spaces
+│   ├── app.py                       # Gradio interface
+│   ├── requirements.txt             # Dependencies for HF Spaces
+│   └── README.md                    # HF Spaces card
+│
+├── scripts/                         # Utility scripts
+│   ├── install.bat                  # Windows installer
+│   ├── install.sh                   # Linux/Mac installer
+│   ├── download_models.py          # Download all AI models
+│   └── start.bat                   # Start both backend & frontend
+│
+├── docker/                          # Docker setup (optional)
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   └── docker-compose.yml
+│
+└── tests/                           # Tests
+    ├── test_face_detector.py
+    ├── test_face_swapper.py
+    └── test_pipeline.py
+
+================================================================================
+11. IMPLEMENTATION PHASES & ORDER
+================================================================================
+
+PHASE 1: Foundation & Core Engine (Day 1-2)
+  ├── 1.1 Install FFmpeg on the machine
+  ├── 1.2 Set up Python virtual environment + install dependencies
+  ├── 1.3 Download AI models (inswapper_128, buffalo_l, GFPGAN)
+  ├── 1.4 Implement face_detector.py (detect faces, extract embeddings)
+  ├── 1.5 Implement face_swapper.py (single frame swap)
+  ├── 1.6 Implement face_enhancer.py (GFPGAN post-processing)
+  ├── 1.7 Test on single image → verify quality
+  └── MILESTONE: Single image face swap working
+
+PHASE 2: Video Pipeline (Day 2-3)
+  ├── 2.1 Implement video_processor.py (frame extraction, reassembly)
+  ├── 2.2 Implement audio handling (extract, preserve, mux back)
+  ├── 2.3 Implement face_matcher.py (character clustering)
+  ├── 2.4 Implement color_corrector.py
+  ├── 2.5 Implement pipeline.py (orchestrate full flow)
+  ├── 2.6 Test on short video clip → verify quality & audio sync
+  └── MILESTONE: Single-threaded video swap working
+
+PHASE 3: Parallel Processing (Day 3)
+  ├── 3.1 Implement chunk_manager.py (split, distribute, merge)
+  ├── 3.2 Add multiprocessing workers
+  ├── 3.3 Add progress tracking across chunks
+  ├── 3.4 Test on longer video → verify correctness & speedup
+  └── MILESTONE: Multi-threaded video swap working
+
+PHASE 4: Backend API (Day 3-4)
+  ├── 4.1 Set up FastAPI project structure
+  ├── 4.2 Implement upload endpoints
+  ├── 4.3 Implement face detection / character listing endpoint
+  ├── 4.4 Implement swap trigger endpoint (async with job queue)
+  ├── 4.5 Implement WebSocket progress endpoint
+  ├── 4.6 Implement download endpoint
+  └── MILESTONE: Full REST API working (test with curl/Postman)
+
+PHASE 5: Frontend UI (Day 4-5)
+  ├── 5.1 Set up Next.js + Tailwind + shadcn
+  ├── 5.2 Build VideoUploader component
+  ├── 5.3 Build FaceSelector component
+  ├── 5.4 Build SourceFaceUpload component
+  ├── 5.5 Build ProcessingStatus component (with progress bar)
+  ├── 5.6 Build VideoPreview component (before/after)
+  ├── 5.7 Wire up API calls & WebSocket
+  ├── 5.8 Polish UI/UX, responsive design, error handling
+  └── MILESTONE: Full web app working end-to-end locally
+
+PHASE 6: Cloud Deployment (Day 5-6)
+  ├── 6.1 Build Gradio app.py (using same core module)
+  ├── 6.2 Test Gradio app locally
+  ├── 6.3 Deploy to Hugging Face Spaces
+  ├── 6.4 (Optional) Deploy frontend to Vercel
+  ├── 6.5 Write documentation & README
+  └── MILESTONE: App live on Hugging Face Spaces with free GPU
+
+================================================================================
+12. RISK MITIGATION & EDGE CASES
+================================================================================
+
+RISK: No NVIDIA GPU on local machine
+  → MITIGATION: Use onnxruntime CPU. Slower (~1 sec/frame) but works.
+  → For speed, deploy to HF Spaces (free GPU reduces to ~0.05 sec/frame)
+  → Inform user of estimated processing time before starting
+
+RISK: inswapper_128 model download blocked or unavailable
+  → MITIGATION: Provide multiple download mirrors (HuggingFace, direct links)
+  → Bundle a download_models.py script with retry logic
+  → Cache models locally after first download
+
+RISK: Face not detected in some frames (occlusion, blur, angle)
+  → MITIGATION: Graceful skip — pass through original frame unchanged
+  → Log skipped frames so user can review
+  → Use lower detection threshold for video continuity
+
+RISK: Face swap looks "pasted on" (lighting/color mismatch)
+  → MITIGATION: 
+    1. GFPGAN restoration pass
+    2. Histogram-based color correction
+    3. Poisson/seamless blending at face boundary
+    4. Gaussian feathering on mask edges
+
+RISK: Temporal flickering (face jumps between frames)
+  → MITIGATION:
+    1. Smooth face landmarks with rolling average (5-frame window)
+    2. Consistent face tracking (use spatial position + embedding)
+    3. Interpolate swap parameters for missing detections
+
+RISK: Long video processing timeout on HF Spaces
+  → MITIGATION: 
+    1. Limit cloud processing to <3 min videos
+    2. For longer: recommend local processing
+    3. Use progress streaming so user knows it's working
+
+RISK: Memory exhaustion on long videos
+  → MITIGATION:
+    1. Process frames in streaming fashion (don't load all into RAM)
+    2. Chunk-based processing with periodic garbage collection
+    3. Write intermediate results to disk, not memory
+
+RISK: Audio/video sync drift after processing
+  → MITIGATION:
+    1. Use exact same FPS for output as input
+    2. Copy audio stream without re-encoding
+    3. Verify frame count matches before/after
+    4. Use FFmpeg's -vsync cfr for constant frame rate
+
+================================================================================
+13. LICENSING & ETHICS
+================================================================================
+
+MODEL LICENSING:
+  - InsightFace code: MIT License ✓ (free for commercial use)
+  - inswapper_128 weights: NON-COMMERCIAL research license
+    → For personal/research use: OK
+    → For commercial deployment: Need to train own model or get license
+  - GFPGAN: Apache 2.0 ✓ (free for commercial use)
+  - buffalo_l models: Mixed (detection is fine, recognition weights vary)
+
+ETHICAL CONSIDERATIONS:
+  - This tool should include a disclaimer about responsible use
+  - Users must have consent from individuals whose faces are swapped
+  - Add watermark option for output videos
+  - Do not facilitate creation of non-consensual deepfakes
+  - Include terms of use in the app UI
+
+================================================================================
+END OF PLAN — READY FOR REVIEW
+================================================================================
+
+NEXT STEPS:
+  1. Review this plan
+  2. Approve or suggest changes
+  3. Begin Phase 1 implementation
+
+ESTIMATED TOTAL TIME: 5-6 days for full implementation
+  (Phase 1-3 can be done in 2-3 days if working intensively)
