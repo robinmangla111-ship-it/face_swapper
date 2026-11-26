@@ -14,5 +14,7 @@
   {"id": "cruise", "name": "Tom Cruise", "category": "Hollywood", "swap_mode": "neural", "filename": "cruise.jpg", "is_custom": false},
   {"id": "rock", "name": "Dwayne Johnson", "category": "Hollywood", "swap_mode": "neural", "filename": "rock.jpg", "is_custom": false},
   {"id": "ironman", "name": "🦾 Iron Man Suit (Full Body)", "category": "Full Body", "swap_mode": "full_body", "filename": "ironman.png", "is_custom": false},
+  {"id": "thor_suit", "name": "⚡ Thor Asgardian Armor (Full Body)", "category": "Full Body", "swap_mode": "full_body", "filename": "thor_fullbody.jpg", "is_custom": false},
+  {"id": "captain_suit", "name": "🛡️ Captain America Suit (Full Body)", "category": "Full Body", "swap_mode": "full_body", "filename": "captain_fullbody.jpg", "is_custom": false},
   {"id": "hanuman", "name": "🙏 Lord Hanuman (Full Body)", "category": "Full Body", "swap_mode": "full_body", "filename": "hanuman.jpg", "is_custom": false}
 ]

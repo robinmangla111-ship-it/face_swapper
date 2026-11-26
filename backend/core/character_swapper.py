@@ -25,15 +25,14 @@ def _extract_full_body_bgra(char_img_path: str) -> Optional[np.ndarray]:
     """
     Load a character image and return it as BGRA with the foreground extracted.
     Supports:
-      - RGBA PNG  → use alpha channel directly
-      - Non-transparent image → GrabCut to separate foreground (character) from background
-    Returns None if extraction fails.
+      - RGBA PNG with genuine alpha channel -> use alpha directly
+      - High black/dark background ratio (>35%) -> direct luminance thresholding with smooth edge feathering
+      - Natural/complex background -> GrabCut foreground segmentation
     """
     path = Path(char_img_path)
     if not path.exists():
         return None
 
-    # Load with alpha if PNG
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
@@ -41,19 +40,28 @@ def _extract_full_body_bgra(char_img_path: str) -> Optional[np.ndarray]:
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-    if img.shape[2] == 4:
-        # Has alpha channel — use directly
+    h, w = img.shape[:2]
+
+    # 1. Check genuine RGBA transparency (at least 2% of pixels are transparent/semi-transparent)
+    if img.shape[2] == 4 and (img[:, :, 3] < 240).sum() > (h * w * 0.02):
         bgra = img.copy()
-        # Zero out near-transparent pixels for cleaner mask
-        alpha = bgra[:, :, 3]
-        bgra[:, :, 3] = np.where(alpha > 10, alpha, 0).astype(np.uint8)
+        bgra[:, :, 3] = np.where(bgra[:, :, 3] > 15, bgra[:, :, 3], 0).astype(np.uint8)
         return bgra
 
-    # RGB/BGR image — use GrabCut with central foreground rect
-    bgr = img[:, :, :3] if img.shape[2] >= 3 else img
-    h, w = bgr.shape[:2]
+    bgr = img[:, :, :3]
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    # Assume character occupies ~90% of image center
+    # 2. Black or dark studio background detection (common for generated costume renders)
+    black_ratio = float((gray < 25).mean())
+    if black_ratio > 0.35:
+        mask = np.where(gray > 20, 255, 0).astype(np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        mask = cv2.GaussianBlur(mask, (5, 5), sigmaX=1.2)
+        bgra = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+        bgra[:, :, 3] = mask
+        return bgra
+
+    # 3. GrabCut fallback for non-transparent photo backgrounds
     margin_x = max(2, w // 15)
     margin_y = max(2, h // 15)
     rect = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
@@ -63,10 +71,8 @@ def _extract_full_body_bgra(char_img_path: str) -> Optional[np.ndarray]:
     fgd_model = np.zeros((1, 65), dtype=np.float64)
 
     try:
-        cv2.grabCut(bgr, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
+        cv2.grabCut(bgr, mask, rect, bgd_model, fgd_model, 4, cv2.GC_INIT_WITH_RECT)
         fg_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
-
-        # Smooth mask edges
         fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         fg_mask = cv2.GaussianBlur(fg_mask, (5, 5), 0)
 
@@ -76,7 +82,7 @@ def _extract_full_body_bgra(char_img_path: str) -> Optional[np.ndarray]:
     except Exception as e:
         logger.warning(f"GrabCut failed: {e}, using full image")
         bgra = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
-        bgra[:, :, 3] = 255  # Fully opaque fallback
+        bgra[:, :, 3] = 255
         return bgra
 
 
