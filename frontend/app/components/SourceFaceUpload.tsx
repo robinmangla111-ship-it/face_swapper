@@ -19,7 +19,7 @@ interface SourceFaceUploadProps {
   onError: (msg: string) => void;
 }
 
-const CATEGORIES = ["All", "Full Body", "Avengers", "Hollywood", "Bollywood", "Mythology", "Custom"];
+const CATEGORIES = ["All", "Avengers", "Hollywood", "Bollywood", "Mythology", "Custom"];
 
 export default function SourceFaceUpload({
   targetCharacter,
@@ -204,17 +204,15 @@ export default function SourceFaceUpload({
                   className="w-full h-full object-cover"
                 />
                 <div className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/75 backdrop-blur-sm rounded-lg text-[11px] font-bold text-green-400">
-                  {sourceFace.swap_mode === "full_body"
-                    ? "🧍 Full Body"
-                    : sourceFace.swap_mode === "mask_overlay"
-                    ? "🎭 Full Mask"
+                  {sourceFace.swap_mode === "mask_overlay"
+                    ? "🎭 Mask / Helmet"
                     : `${(sourceFace.confidence * 100).toFixed(0)}% Face`}
                 </div>
               </div>
               <p className="text-center text-sm text-zinc-300 font-medium">{sourceFace.filename}</p>
               {/* Mode selector */}
               <div className="flex flex-wrap justify-center gap-2 pt-1">
-                {(["neural", "mask_overlay", "full_body"] as const).map((mode) => (
+                {(["neural", "mask_overlay"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -223,17 +221,15 @@ export default function SourceFaceUpload({
                       setSourceFace(updated);
                       onUploadComplete(updated);
                     }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
+                    className={`px-3 py-1 rounded-lg text-xs font-medium border transition-all ${
                       (sourceFace.swap_mode || "neural") === mode
                         ? "bg-brand-500/20 border-brand-500 text-brand-300"
                         : "bg-zinc-800/60 border-zinc-700 text-zinc-400 hover:text-zinc-200"
                     }`}
                   >
                     {mode === "neural"
-                      ? "👤 Neural Face"
-                      : mode === "mask_overlay"
-                      ? "🎭 Head / Mask"
-                      : "🧍 Full Body / Character"}
+                      ? "👤 Neural Face Swap"
+                      : "🎭 Head / Helmet Overlay"}
                   </button>
                 ))}
               </div>
@@ -349,7 +345,6 @@ export default function SourceFaceUpload({
                   <option value="auto">Auto Detect (Recommended)</option>
                   <option value="neural">Human / Celebrity Face</option>
                   <option value="mask_overlay">Head Mask / Helmet / Stylized</option>
-                  <option value="full_body">Full Body / Character Suit</option>
                 </select>
               </div>
             </div>
@@ -443,7 +438,7 @@ export default function SourceFaceUpload({
                       </div>
                     )}
                     <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-zinc-300">
-                      {char.swap_mode === "full_body" ? "🧍 Body" : char.swap_mode === "mask_overlay" ? "🎭 Mask" : char.category}
+                      {char.swap_mode === "mask_overlay" ? "🎭 Mask" : char.category}
                     </span>
                     {char.is_custom && (
                       <button

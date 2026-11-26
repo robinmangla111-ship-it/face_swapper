@@ -238,15 +238,15 @@ class FaceSwapper:
                 return self.mask_overlay_swap(img, tgt_face, overlay_bgra, overlay_kps)
             return self.custom_blend_swap(img, tgt_face, source_face)
 
-        # Case 1: Explicit single character mode — swap every valid face in frame
+        # Case 1: Single character video with single face in frame — swap immediately
         min_det = 0.42 if swap_mode == "mask_overlay" else 0.25
-        if always_swap_if_single:
-            for face in target_faces:
-                if face.det_score >= min_det:
-                    result = _apply_swap(result, face)
-                    swapped_bboxes.append(face.bbox)
-                    self.last_target_bbox = face.bbox
-                    self.tracking_miss_count = 0
+        if always_swap_if_single and len(target_faces) == 1:
+            face = target_faces[0]
+            if face.det_score >= min_det:
+                result = _apply_swap(result, face)
+                swapped_bboxes.append(face.bbox)
+                self.last_target_bbox = face.bbox
+                self.tracking_miss_count = 0
             return result, swapped_bboxes
 
         # Case 2: Only 1 face in the frame

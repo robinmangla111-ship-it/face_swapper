@@ -296,84 +296,58 @@ class FaceSwapPipeline:
                     except Exception:
                         pass
 
-            # Decide: full_body vs parallel vs sequential
-            if effective_mode == "full_body":
-                from core.character_swapper import CharacterSwapper
-                char_swapper = CharacterSwapper(fal_key=job.fal_key)
-                if char_swapper.has_cloud_gpu:
-                    job.current_step = "Running Cloud AI Full-Body Replacement..."
-                    logger.info("Using Cloud AI (fal.ai) for full-body character replacement")
-                    char_swapper.process_full_body_cloud(
-                        video_path=job.video_path,
-                        character_image_path=job.source_face_path,
-                        output_path=temp_video_path,
-                        progress_callback=_progress_wrapper,
-                    )
+            # Decide: parallel or sequential
+            use_parallel = video_info.total_frames > AUTO_PARALLEL_THRESHOLD
+            num_w = num_workers or chunk_mgr.num_workers
+
+            if use_parallel and num_w > 1:
+                # Parallel processing
+                chunks = chunk_mgr.create_chunks(video_info.total_frames)
+                logger.info(f"Using parallel processing: {len(chunks)} chunks, "
+                            f"{num_w} workers")
+
+                results = chunk_mgr.process_parallel(
+                    video_path=job.video_path,
+                    source_face_path=job.source_face_path,
+                    char_embedding=char_embedding_array,
+                    chunks=chunks,
+                    temp_dir=job_temp_dir,
+                    similarity_threshold=self._similarity_threshold,
+                    enhance_enabled=enhance,
+                    always_swap_if_single=is_single_character,
+                    other_embeddings=other_embedding_array,
+                    swap_mode=effective_mode,
+                    progress_callback=_progress_wrapper,
+                )
+
+                # Check for failures
+                failed = [r for r in results if not r.success]
+                if len(failed) == len(results):
+                    raise RuntimeError("All chunks failed to process")
+
+                # Merge successful chunks
+                job.current_step = "Merging chunks..."
+                chunk_paths = [r.output_path for r in results if r.success]
+                if len(chunk_paths) > 1:
+                    self.video_proc.concat_videos(chunk_paths, temp_video_path)
                 else:
-                    job.current_step = "Running Local Full-Body Character Alignment..."
-                    logger.info("Using Local CPU full-body character alignment (no FAL_KEY set)")
-                    char_swapper.process_full_body_local(
-                        video_path=job.video_path,
-                        character_image_path=job.source_face_path,
-                        output_path=temp_video_path,
-                        char_embedding=char_embedding_array,
-                        other_embeddings=other_embedding_array,
-                        always_swap_if_single=is_single_character,
-                        progress_callback=_progress_wrapper,
-                    )
+                    shutil.copy2(chunk_paths[0], temp_video_path)
+
             else:
-                # Decide: parallel or sequential
-                use_parallel = video_info.total_frames > AUTO_PARALLEL_THRESHOLD
-                num_w = num_workers or chunk_mgr.num_workers
-
-                if use_parallel and num_w > 1:
-                    # Parallel processing
-                    chunks = chunk_mgr.create_chunks(video_info.total_frames)
-                    logger.info(f"Using parallel processing: {len(chunks)} chunks, "
-                                f"{num_w} workers")
-
-                    results = chunk_mgr.process_parallel(
-                        video_path=job.video_path,
-                        source_face_path=job.source_face_path,
-                        char_embedding=char_embedding_array,
-                        chunks=chunks,
-                        temp_dir=job_temp_dir,
-                        similarity_threshold=self._similarity_threshold,
-                        enhance_enabled=enhance,
-                        always_swap_if_single=is_single_character,
-                        other_embeddings=other_embedding_array,
-                        swap_mode=effective_mode,
-                        progress_callback=_progress_wrapper,
-                    )
-
-                    # Check for failures
-                    failed = [r for r in results if not r.success]
-                    if len(failed) == len(results):
-                        raise RuntimeError("All chunks failed to process")
-
-                    # Merge successful chunks
-                    job.current_step = "Merging chunks..."
-                    chunk_paths = [r.output_path for r in results if r.success]
-                    if len(chunk_paths) > 1:
-                        self.video_proc.concat_videos(chunk_paths, temp_video_path)
-                    else:
-                        shutil.copy2(chunk_paths[0], temp_video_path)
-
-                else:
-                    # Sequential processing
-                    logger.info("Using sequential processing")
-                    chunk_mgr.process_sequential(
-                        video_path=job.video_path,
-                        source_face_path=job.source_face_path,
-                        char_embedding=char_embedding_array,
-                        output_path=temp_video_path,
-                        similarity_threshold=self._similarity_threshold,
-                        enhance_enabled=enhance,
-                        always_swap_if_single=is_single_character,
-                        other_embeddings=other_embedding_array,
-                        swap_mode=effective_mode,
-                        progress_callback=_progress_wrapper,
-                    )
+                # Sequential processing
+                logger.info("Using sequential processing")
+                chunk_mgr.process_sequential(
+                    video_path=job.video_path,
+                    source_face_path=job.source_face_path,
+                    char_embedding=char_embedding_array,
+                    output_path=temp_video_path,
+                    similarity_threshold=self._similarity_threshold,
+                    enhance_enabled=enhance,
+                    always_swap_if_single=is_single_character,
+                    other_embeddings=other_embedding_array,
+                    swap_mode=effective_mode,
+                    progress_callback=_progress_wrapper,
+                )
 
             # ── Step 4: Mux audio + video ─────────────────────────────────
             job.current_step = "Assembling final video..."
