@@ -4,16 +4,17 @@ Full-Body Character Replacement Engine
 Supports two backends for replacing an entire character (body + outfit + head):
   1. Cloud Diffusion (fal.ai Wan-Animate / Kling) when FAL_KEY is configured:
      True photorealistic pose-driven whole-body character replacement on GPU.
-  2. Local Offline Body-Scale Overlay (CPU):
-     Tracks detected person bounding box + face keypoints to estimate full-body
-     bounding box, then scales the character image to cover head-to-waist/hips
-     using standard 7x face-height human proportion scaling.
+  2. Local Offline Proportional Character Alignment (CPU):
+     Aligns full costume/character silhouette to the tracked target actor's face
+     and head coordinates while strictly preserving aspect ratio and natural human
+     proportions. Applies exponential moving average (EMA) temporal smoothing
+     to eliminate jitter across frames.
 """
 
 import logging
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -51,7 +52,7 @@ def _extract_full_body_bgra(char_img_path: str) -> Optional[np.ndarray]:
     bgr = img[:, :, :3]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    # 2. Black or dark studio background detection (common for generated costume renders)
+    # 2. Black or dark studio background detection
     black_ratio = float((gray < 25).mean())
     if black_ratio > 0.35:
         mask = np.where(gray > 20, 255, 0).astype(np.uint8)
@@ -86,70 +87,33 @@ def _extract_full_body_bgra(char_img_path: str) -> Optional[np.ndarray]:
         return bgra
 
 
-def _estimate_body_bbox(face_bbox: np.ndarray, frame_shape: tuple,
-                         body_scale_x: float = 2.5, body_scale_y: float = 7.0) -> tuple:
+def get_costume_anchor(bgra: np.ndarray) -> Tuple[int, int, int]:
     """
-    Given a detected face bounding box, estimate where the full body is.
-    Uses standard 7x face-height for body height, 2.5x face-width for body width.
-
-    Returns: (x1, y1, x2, y2) body bounding box, clamped to frame
+    Finds the head center (cx, cy) and head height (head_h) in a costume silhouette.
+    Works for both human faces and stylized masks/helmets by analyzing the upper silhouette.
     """
-    fh, fw = frame_shape[:2]
-    x1, y1, x2, y2 = [float(v) for v in face_bbox]
-    face_w = x2 - x1
-    face_h = y2 - y1
+    h, w = bgra.shape[:2]
+    alpha = bgra[:, :, 3]
+    ys, xs = np.where(alpha > 25)
+    if len(ys) == 0:
+        return w // 2, h // 8, max(24, h // 7)
 
-    # Body width is wider than face
-    body_w = face_w * body_scale_x
-    # Body top is at the top of the head (~0.3x face_h above detected face top)
-    body_top = y1 - face_h * 0.3
-    # Body bottom is below the detected face by 7x face height
-    body_bot = y1 + face_h * body_scale_y
+    min_y, max_y = int(ys.min()), int(ys.max())
+    min_x, max_x = int(xs.min()), int(xs.max())
+    fig_h = max_y - min_y
 
-    # Center horizontally on the face center
-    face_cx = (x1 + x2) / 2.0
-    bx1 = face_cx - body_w / 2.0
-    bx2 = face_cx + body_w / 2.0
+    # Head is located in the top 16% of the silhouette
+    head_region_y = min_y + max(10, int(fig_h * 0.16))
+    head_ys, head_xs = np.where(alpha[min_y:head_region_y, :] > 25)
+    if len(head_xs) > 0:
+        head_cx = int(head_xs.mean())
+        head_cy = min_y + int(head_ys.mean())
+    else:
+        head_cx = (min_x + max_x) // 2
+        head_cy = min_y + int(fig_h * 0.08)
 
-    # Clamp to frame
-    bx1 = max(0, int(bx1))
-    bx2 = min(fw, int(bx2))
-    by1 = max(0, int(body_top))
-    by2 = min(fh, int(body_bot))
-
-    return bx1, by1, bx2, by2
-
-
-def _overlay_character_at_body(frame: np.ndarray, char_bgra: np.ndarray,
-                                body_bbox: tuple, smooth_alpha: float = 0.0) -> np.ndarray:
-    """
-    Scale char_bgra to fit the body bounding box and alpha-composite onto frame.
-    smooth_alpha: blend ratio for temporal smoothing of alpha channel (0 = disabled).
-    """
-    bx1, by1, bx2, by2 = body_bbox
-    bw = bx2 - bx1
-    bh = by2 - by1
-    if bw <= 0 or bh <= 0:
-        return frame
-
-    # Resize character image to fit body bounding box
-    resized = cv2.resize(char_bgra, (bw, bh), interpolation=cv2.INTER_LANCZOS4)
-    alpha = resized[:, :, 3:4].astype(np.float32) / 255.0
-
-    # Soft-feather edges
-    alpha_2d = cv2.GaussianBlur(alpha[:, :, 0], (5, 5), sigmaX=1.5)
-    alpha = alpha_2d[:, :, np.newaxis]
-
-    if np.max(alpha) < 0.02:
-        return frame
-
-    fg = resized[:, :, :3].astype(np.float32)
-    bg = frame[by1:by2, bx1:bx2].astype(np.float32)
-    blended = fg * alpha + bg * (1.0 - alpha)
-
-    result = frame.copy()
-    result[by1:by2, bx1:bx2] = np.clip(blended, 0, 255).astype(np.uint8)
-    return result
+    head_h = max(24, int(fig_h / 7.2))
+    return head_cx, head_cy, head_h
 
 
 class CharacterSwapper:
@@ -247,34 +211,50 @@ class CharacterSwapper:
         video_path: str,
         character_image_path: str,
         output_path: str,
+        char_embedding: Optional[Union[np.ndarray, list]] = None,
+        other_embeddings: Optional[Union[np.ndarray, list]] = None,
+        always_swap_if_single: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        body_scale_x: float = 2.5,
-        body_scale_y: float = 7.0,
+        head_multiplier: float = 1.25,
     ) -> str:
         """
-        Local CPU full-body character overlay replacement.
+        Local CPU full-body character replacement.
 
-        Strategy:
-        1. Detect person's face in each frame using InsightFace
-        2. From face bbox, estimate where the full body is using standard human proportions
-           (body height ≈ 7× face height, body width ≈ 2.5× face width)
-        3. Scale the character image to fit the estimated body bounding box
-        4. Alpha-composite the character over the person with temporal smoothing
-
-        This replaces the ENTIRE person silhouette with the character image,
-        including body, costume/suit, and head.
+        1. Accurately identifies the target person using face embeddings (does not swap competitor actors).
+        2. Aligns costume head anchor to the target face center with strict aspect-ratio preservation.
+        3. Applies exponential moving average (EMA) temporal smoothing on position and scale to eliminate jitter.
+        4. Composites the costume onto the target body with feathered transparency blending.
         """
         from core.face_detector import FaceDetector
         from core.video_processor import create_video_writer
 
-        logger.info(f"Full-body local replacement: {character_image_path} → {video_path}")
+        logger.info(f"Starting local full-body replacement: {character_image_path} -> {video_path}")
 
-        # Extract character foreground
+        # 1. Load costume and find head anchor
         char_bgra = _extract_full_body_bgra(character_image_path)
         if char_bgra is None:
             raise ValueError(f"Cannot load character image: {character_image_path}")
-        logger.info(f"Character image loaded: {char_bgra.shape}, "
-                    f"alpha_max={char_bgra[:,:,3].max()}")
+
+        costume_cx, costume_cy, costume_h = get_costume_anchor(char_bgra)
+        char_h, char_w = char_bgra.shape[:2]
+        logger.info(f"Costume loaded: {char_w}x{char_h}, head_anchor=({costume_cx}, {costume_cy}), head_h={costume_h}")
+
+        # 2. Parse reference embeddings
+        ref_embeddings = []
+        if char_embedding is not None:
+            arr = np.asarray(char_embedding, dtype=np.float32)
+            if arr.ndim == 1 and arr.size > 0:
+                ref_embeddings = [arr]
+            elif arr.ndim == 2 and arr.size > 0:
+                ref_embeddings = [row for row in arr]
+
+        oth_embeddings = []
+        if other_embeddings is not None:
+            arr_oth = np.asarray(other_embeddings, dtype=np.float32)
+            if arr_oth.ndim == 1 and arr_oth.size > 0:
+                oth_embeddings = [arr_oth]
+            elif arr_oth.ndim == 2 and arr_oth.size > 0:
+                oth_embeddings = [row for row in arr_oth]
 
         detector = FaceDetector()
 
@@ -291,8 +271,9 @@ class CharacterSwapper:
         if not writer.isOpened():
             raise RuntimeError(f"Cannot create VideoWriter: {output_path}")
 
-        # Temporal smoothing state for body bbox
-        smooth_bbox: Optional[np.ndarray] = None   # [x1, y1, x2, y2] smoothed
+        # Smoothed state: [x0, y0, nw, nh]
+        smoothed_rect: Optional[np.ndarray] = None
+        last_face_center: Optional[Tuple[float, float]] = None
         miss_count = 0
         frame_idx = 0
 
@@ -301,37 +282,127 @@ class CharacterSwapper:
             if not ret:
                 break
 
-            # Detect faces
             faces = detector.detect_faces(frame)
-            best_face = None
-            if faces:
-                # Pick highest confidence face
-                best_face = max(faces, key=lambda f: f.det_score)
-                if best_face.det_score < 0.25:
-                    best_face = None
+            target_face = None
 
-            if best_face is not None:
-                # Estimate full body bounding box from face
-                raw_bbox = np.array(_estimate_body_bbox(
-                    best_face.bbox, frame.shape,
-                    body_scale_x=body_scale_x,
-                    body_scale_y=body_scale_y,
-                ), dtype=np.float32)
+            if faces:
+                if always_swap_if_single or not ref_embeddings:
+                    # Pick face closest to previous tracking center, or highest confidence
+                    if last_face_center is not None:
+                        target_face = min(
+                            faces,
+                            key=lambda f: np.hypot(
+                                (f.bbox[0] + f.bbox[2]) / 2.0 - last_face_center[0],
+                                (f.bbox[1] + f.bbox[3]) / 2.0 - last_face_center[1]
+                            )
+                        )
+                    else:
+                        target_face = max(faces, key=lambda f: f.det_score)
+                else:
+                    # Multi-face discrimination: match against target embeddings
+                    best_score = -1.0
+                    for face in faces:
+                        sim_tgt = max(
+                            (FaceDetector.compute_similarity(face.embedding, emb) for emb in ref_embeddings),
+                            default=0.0
+                        )
+                        sim_oth = max(
+                            (FaceDetector.compute_similarity(face.embedding, emb) for emb in oth_embeddings),
+                            default=0.0
+                        ) if oth_embeddings else 0.0
+
+                        # Reject if closer to a competitor character
+                        if oth_embeddings and sim_oth > sim_tgt:
+                            continue
+
+                        # Spatial bonus
+                        spatial_bonus = 0.0
+                        if last_face_center is not None and miss_count <= 15:
+                            cx = (face.bbox[0] + face.bbox[2]) / 2.0
+                            cy = (face.bbox[1] + face.bbox[3]) / 2.0
+                            dist = np.hypot(cx - last_face_center[0], cy - last_face_center[1])
+                            diag = np.hypot(width, height)
+                            norm_dist = dist / max(diag, 1.0)
+                            if norm_dist < 0.25:
+                                spatial_bonus = 0.25 * (1.0 - (norm_dist / 0.25))
+
+                        score = sim_tgt + spatial_bonus
+                        if score > best_score:
+                            best_score = score
+                            target_face = face
+
+                    if best_score < 0.18 and last_face_center is not None and miss_count <= 15:
+                        # Fallback to spatial tracking if embedding was temporarily missed
+                        closest_face = min(
+                            faces,
+                            key=lambda f: np.hypot(
+                                (f.bbox[0] + f.bbox[2]) / 2.0 - last_face_center[0],
+                                (f.bbox[1] + f.bbox[3]) / 2.0 - last_face_center[1]
+                            )
+                        )
+                        cx = (closest_face.bbox[0] + closest_face.bbox[2]) / 2.0
+                        cy = (closest_face.bbox[1] + closest_face.bbox[3]) / 2.0
+                        if np.hypot(cx - last_face_center[0], cy - last_face_center[1]) < width * 0.15:
+                            target_face = closest_face
+
+            if target_face is not None:
+                fx1, fy1, fx2, fy2 = target_face.bbox
+                fcx = (fx1 + fx2) / 2.0
+                fcy = (fy1 + fy2) / 2.0
+                fh = fy2 - fy1
+
+                # Calculate aspect-ratio preserved scaling
+                scale = (fh / max(costume_h, 1.0)) * head_multiplier
+                curr_nw = max(10, int(char_w * scale))
+                curr_nh = max(10, int(char_h * scale))
+                curr_x0 = int(fcx - (costume_cx * scale))
+                curr_y0 = int(fcy - (costume_cy * scale))
+
+                curr_rect = np.array([curr_x0, curr_y0, curr_nw, curr_nh], dtype=np.float32)
 
                 # Temporal smoothing (EMA)
-                if smooth_bbox is None:
-                    smooth_bbox = raw_bbox
+                if smoothed_rect is None:
+                    smoothed_rect = curr_rect
                 else:
-                    smooth_bbox = 0.6 * raw_bbox + 0.4 * smooth_bbox
+                    smoothed_rect = 0.65 * curr_rect + 0.35 * smoothed_rect
+
+                last_face_center = (fcx, fcy)
                 miss_count = 0
             else:
                 miss_count += 1
                 if miss_count > 15:
-                    smooth_bbox = None   # Lost track, reset
+                    smoothed_rect = None
+                    last_face_center = None
 
-            if smooth_bbox is not None:
-                bbox_int = tuple(int(v) for v in smooth_bbox)
-                frame = _overlay_character_at_body(frame, char_bgra, bbox_int)
+            # Render character overlay onto frame
+            if smoothed_rect is not None:
+                x0, y0, nw, nh = [int(v) for v in smoothed_rect]
+                if nw > 10 and nh > 10:
+                    resized_char = cv2.resize(char_bgra, (nw, nh), interpolation=cv2.INTER_LANCZOS4)
+
+                    rx1 = max(0, x0)
+                    ry1 = max(0, y0)
+                    rx2 = min(width, x0 + nw)
+                    ry2 = min(height, y0 + nh)
+
+                    cx1 = rx1 - x0
+                    cy1 = ry1 - y0
+                    cx2 = cx1 + (rx2 - rx1)
+                    cy2 = cy1 + (ry2 - ry1)
+
+                    if rx2 > rx1 and ry2 > ry1 and cx2 > cx1 and cy2 > cy1:
+                        costume_roi = resized_char[cy1:cy2, cx1:cx2]
+                        alpha = costume_roi[:, :, 3:4].astype(np.float32) / 255.0
+
+                        # Smooth outer alpha border
+                        alpha_2d = cv2.GaussianBlur(alpha[:, :, 0], (5, 5), sigmaX=1.2)
+                        alpha = alpha_2d[:, :, np.newaxis]
+
+                        if np.max(alpha) > 0.02:
+                            fg = costume_roi[:, :, :3].astype(np.float32)
+                            bg = frame[ry1:ry2, rx1:rx2].astype(np.float32)
+                            blended = fg * alpha + bg * (1.0 - alpha)
+                            frame[ry1:ry2, rx1:rx2] = np.clip(blended, 0, 255).astype(np.uint8)
 
             writer.write(frame)
             frame_idx += 1
@@ -345,5 +416,5 @@ class CharacterSwapper:
         if progress_callback:
             progress_callback(total_frames, total_frames)
 
-        logger.info(f"Full-body local replacement complete: {frame_idx} frames written → {output_path}")
+        logger.info(f"Full-body replacement complete: {frame_idx} frames written -> {output_path}")
         return output_path

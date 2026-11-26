@@ -316,6 +316,9 @@ class FaceSwapPipeline:
                         video_path=job.video_path,
                         character_image_path=job.source_face_path,
                         output_path=temp_video_path,
+                        char_embedding=char_embedding_array,
+                        other_embeddings=other_embedding_array,
+                        always_swap_if_single=is_single_character,
                         progress_callback=_progress_wrapper,
                     )
             else:
