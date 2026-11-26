@@ -163,6 +163,7 @@ class SwapRequest(BaseModel):
     enhance: bool = True
     num_workers: Optional[int] = None
     swap_mode: str = "auto"
+    fal_key: Optional[str] = None
 
     @field_validator("character_id", mode="before")
     @classmethod
@@ -480,6 +481,7 @@ async def start_swap(request: SwapRequest, background_tasks: BackgroundTasks):
         source_face_path=face_data["path"],
         character_id=request.character_id,
         swap_mode=request.swap_mode or face_data.get("swap_mode", "auto"),
+        fal_key=request.fal_key,
     )
     jobs[job_id] = job
 

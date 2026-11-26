@@ -41,6 +41,7 @@ export default function HomePage() {
   const [settings, setSettings] = useState<SwapSettings>({
     enhance: true,
     numWorkers: null,
+    falKey: "",
   });
 
   // Toasts
@@ -95,6 +96,7 @@ export default function HomePage() {
         enhance: settings.enhance,
         num_workers: settings.numWorkers,
         swap_mode: sourceFace.swap_mode || "auto",
+        fal_key: settings.falKey?.trim() || undefined,
       });
       setJobId(res.job_id);
       setStep(4);

@@ -57,6 +57,7 @@ export interface SwapRequest {
   enhance: boolean;
   num_workers: number | null;
   swap_mode?: string;
+  fal_key?: string;
 }
 
 export interface SwapResponse {

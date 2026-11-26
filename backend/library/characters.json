@@ -1,130 +1,18 @@
 [
-  {
-    "id": "srk",
-    "name": "Shah Rukh Khan",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "srk.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "salman",
-    "name": "Salman Khan",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "salman.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "hrithik",
-    "name": "Hrithik Roshan",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "hrithik.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "deepika",
-    "name": "Deepika Padukone",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "deepika.png",
-    "is_custom": false
-  },
-  {
-    "id": "rdj",
-    "name": "Tony Stark (RDJ)",
-    "category": "Avengers",
-    "swap_mode": "neural",
-    "filename": "rdj.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "cap",
-    "name": "Captain America (Chris Evans)",
-    "category": "Avengers",
-    "swap_mode": "neural",
-    "filename": "cap.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "widow",
-    "name": "Black Widow (Scarlett)",
-    "category": "Avengers",
-    "swap_mode": "neural",
-    "filename": "widow.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "alia",
-    "name": "Alia Bhatt",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "alia.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "priyanka",
-    "name": "Priyanka Chopra",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "priyanka.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "virat",
-    "name": "Virat Kohli",
-    "category": "Bollywood",
-    "swap_mode": "neural",
-    "filename": "virat.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "cruise",
-    "name": "Tom Cruise",
-    "category": "Hollywood",
-    "swap_mode": "neural",
-    "filename": "cruise.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "rock",
-    "name": "Dwayne Johnson",
-    "category": "Hollywood",
-    "swap_mode": "neural",
-    "filename": "rock.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "hanuman",
-    "name": "Lord Hanuman",
-    "category": "Mythology",
-    "swap_mode": "mask_overlay",
-    "filename": "hanuman.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "thor",
-    "name": "Thor (Avengers)",
-    "category": "Avengers",
-    "swap_mode": "neural",
-    "filename": "thor.jpg",
-    "is_custom": false
-  },
-  {
-    "id": "ironman",
-    "name": "Iron Man (Helmet)",
-    "category": "Avengers",
-    "swap_mode": "mask_overlay",
-    "filename": "ironman.png",
-    "is_custom": false
-  },
-  {
-    "id": "hulk",
-    "name": "Hulk (Mark Ruffalo)",
-    "category": "Avengers",
-    "swap_mode": "neural",
-    "filename": "hulk.jpg",
-    "is_custom": false
-  }
+  {"id": "srk", "name": "Shah Rukh Khan", "category": "Bollywood", "swap_mode": "neural", "filename": "srk.jpg", "is_custom": false},
+  {"id": "salman", "name": "Salman Khan", "category": "Bollywood", "swap_mode": "neural", "filename": "salman.jpg", "is_custom": false},
+  {"id": "hrithik", "name": "Hrithik Roshan", "category": "Bollywood", "swap_mode": "neural", "filename": "hrithik.jpg", "is_custom": false},
+  {"id": "deepika", "name": "Deepika Padukone", "category": "Bollywood", "swap_mode": "neural", "filename": "deepika.png", "is_custom": false},
+  {"id": "alia", "name": "Alia Bhatt", "category": "Bollywood", "swap_mode": "neural", "filename": "alia.jpg", "is_custom": false},
+  {"id": "priyanka", "name": "Priyanka Chopra", "category": "Bollywood", "swap_mode": "neural", "filename": "priyanka.jpg", "is_custom": false},
+  {"id": "virat", "name": "Virat Kohli", "category": "Bollywood", "swap_mode": "neural", "filename": "virat.jpg", "is_custom": false},
+  {"id": "rdj", "name": "Tony Stark (RDJ)", "category": "Avengers", "swap_mode": "neural", "filename": "rdj.jpg", "is_custom": false},
+  {"id": "cap", "name": "Captain America", "category": "Avengers", "swap_mode": "neural", "filename": "cap.jpg", "is_custom": false},
+  {"id": "widow", "name": "Black Widow (Scarlett)", "category": "Avengers", "swap_mode": "neural", "filename": "widow.jpg", "is_custom": false},
+  {"id": "thor", "name": "Thor", "category": "Avengers", "swap_mode": "neural", "filename": "thor.jpg", "is_custom": false},
+  {"id": "hulk", "name": "Hulk (Mark Ruffalo)", "category": "Avengers", "swap_mode": "neural", "filename": "hulk.jpg", "is_custom": false},
+  {"id": "cruise", "name": "Tom Cruise", "category": "Hollywood", "swap_mode": "neural", "filename": "cruise.jpg", "is_custom": false},
+  {"id": "rock", "name": "Dwayne Johnson", "category": "Hollywood", "swap_mode": "neural", "filename": "rock.jpg", "is_custom": false},
+  {"id": "ironman", "name": "🦾 Iron Man Suit (Full Body)", "category": "Full Body", "swap_mode": "full_body", "filename": "ironman.png", "is_custom": false},
+  {"id": "hanuman", "name": "🙏 Lord Hanuman (Full Body)", "category": "Full Body", "swap_mode": "full_body", "filename": "hanuman.jpg", "is_custom": false}
 ]

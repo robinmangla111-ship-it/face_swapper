@@ -49,7 +49,7 @@ class VideoInfo:
 class FFmpegVideoWriter:
     """Direct uncompressed rawvideo pipe to FFmpeg libx264 for visually lossless output."""
     def __init__(self, output_path: str, width: int, height: int, fps: float,
-                 crf: int = 15, preset: str = "veryfast"):
+                 crf: int = 15, preset: str = "ultrafast"):
         from config import FFMPEG_PATH
         self.output_path = output_path
         self.width = width
@@ -63,6 +63,7 @@ class FFmpegVideoWriter:
             "-pix_fmt", "bgr24",
             "-r", str(fps),
             "-i", "-",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v", "libx264",
             "-crf", str(crf),
             "-preset", preset,

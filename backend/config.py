@@ -88,6 +88,15 @@ def get_execution_providers():
 EXECUTION_PROVIDERS = get_execution_providers()
 USE_GPU = 'CUDAExecutionProvider' in EXECUTION_PROVIDERS
 
+# Limit CPU parallel workers to 2 to avoid ONNX thread thrashing on 4-core CPUs
+if not USE_GPU:
+    EFFECTIVE_MAX_WORKERS = min(2, EFFECTIVE_MAX_WORKERS)
+
+# ─── Cloud AI Full-Body Character Replacement (Optional) ──────────────────────
+# Set FAL_KEY or REPLICATE_API_TOKEN in environment or pass via UI Settings
+FAL_KEY = os.environ.get("FAL_KEY", "")
+REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "")
+
 # ─── FFmpeg Path ──────────────────────────────────────────────────────────────
 def get_ffmpeg_path():
     """Get path to FFmpeg binary. Try system PATH first, then imageio-ffmpeg."""

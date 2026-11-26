@@ -84,9 +84,10 @@ class FaceDetector:
             self._app = FaceAnalysis(
                 name=self._model_name,
                 providers=self._providers,
+                allowed_modules=['detection', 'recognition'],
             )
             self._app.prepare(ctx_id=0, det_size=self._det_size, det_thresh=self._det_thresh)
-            logger.info("FaceAnalysis model loaded successfully")
+            logger.info("FaceAnalysis model loaded successfully (detection + recognition)")
         except Exception as e:
             logger.error(f"Failed to load FaceAnalysis: {e}")
             raise RuntimeError(
@@ -94,13 +95,15 @@ class FaceDetector:
                 f"Make sure insightface is installed: pip install insightface"
             ) from e
 
-    def detect_faces(self, image: np.ndarray, max_faces: int = 20) -> list:
+    def detect_faces(self, image: np.ndarray, max_faces: int = 20,
+                     allow_padded_fallback: bool = False) -> list:
         """
         Detect all faces in an image.
 
         Args:
             image: BGR image as numpy array (HxWxC)
             max_faces: Maximum number of faces to return
+            allow_padded_fallback: Retry with reflective padding if no face found (for source images)
 
         Returns:
             List of InsightFace Face objects, sorted by detection score
@@ -112,10 +115,8 @@ class FaceDetector:
         try:
             faces = self._app.get(image)
             
-            # Close-up / extreme crop fallback:
-            # If no face is detected (e.g. face touches edges of frame in tight zoom shots),
-            # pad the frame with reflective border so RetinaFace can capture full facial contours.
-            if not faces and image.shape[0] >= 64 and image.shape[1] >= 64:
+            # Close-up / extreme crop fallback (enabled for source photos / discovery, skipped per-frame for speed)
+            if allow_padded_fallback and not faces and image.shape[0] >= 64 and image.shape[1] >= 64:
                 h, w = image.shape[:2]
                 pad_y = int(h * 0.25)
                 pad_x = int(w * 0.25)
@@ -195,7 +196,7 @@ class FaceDetector:
         Tries standard detection first, then falls back to lower threshold (0.12)
         and upscaled/padded image if no face is found.
         """
-        faces = self.detect_faces(image, max_faces=max_faces)
+        faces = self.detect_faces(image, max_faces=max_faces, allow_padded_fallback=True)
         if faces or image is None or image.size == 0:
             return faces
 
@@ -242,8 +243,13 @@ class FaceDetector:
 
         if raw.ndim == 2:
             raw = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGRA)
-        elif raw.shape[2] == 3:
-            # No alpha channel: extract clean foreground via GrabCut + elliptical feathering
+        elif raw.shape[2] == 4:
+            # If alpha channel is solid opaque everywhere (>98% opaque), treat as 3-channel RGB for GrabCut
+            if float(np.mean(raw[:, :, 3] > 250)) > 0.98:
+                raw = raw[:, :, :3]
+
+        if raw.shape[2] == 3:
+            # No useful alpha channel: extract clean foreground via GrabCut + elliptical feathering
             h, w = raw.shape[:2]
             mask = np.zeros((h, w), np.uint8)
             bgd_model = np.zeros((1, 65), np.float64)
@@ -273,9 +279,16 @@ class FaceDetector:
 
         # Try detecting facial keypoints if character has human-like features
         faces = self.detect_faces_robust(bgr, max_faces=1)
+        use_detected_kps = False
         if faces and hasattr(faces[0], "kps") and faces[0].kps is not None:
-            kps = np.array(faces[0].kps, dtype=np.float32)
-        else:
+            cand_kps = np.array(faces[0].kps, dtype=np.float32)
+            eye_dist = float(np.linalg.norm(cand_kps[1] - cand_kps[0]))
+            mouth_eye_dist = float(np.linalg.norm(cand_kps[3] - cand_kps[0]))
+            if eye_dist >= min(h, w) * 0.08 and mouth_eye_dist >= min(h, w) * 0.08:
+                kps = cand_kps
+                use_detected_kps = True
+
+        if not use_detected_kps:
             # Canonical centered portrait keypoints (left_eye, right_eye, nose, left_mouth, right_mouth)
             kps = np.array([
                 [w * 0.36, h * 0.42],

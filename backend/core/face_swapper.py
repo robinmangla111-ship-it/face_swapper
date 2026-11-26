@@ -119,11 +119,15 @@ class FaceSwapper:
 
     def mask_overlay_swap(self, frame: np.ndarray, target_face,
                           overlay_bgra: np.ndarray, overlay_kps: np.ndarray,
-                          head_scale: float = 1.25) -> np.ndarray:
+                          head_scale: float = 1.15,
+                          body_scale: float = 0.0) -> np.ndarray:
         """
         Full-head / mask / stylized character overlay swap (e.g., Iron Man helmet, Hanuman).
         Tracks the target face's 5 keypoints (eyes, nose, mouth) to match head roll, scale,
-        and position, with ambient illumination matching and smooth alpha blending.
+        and position, with geometry validation so it never hangs off occluded/turned heads.
+
+        When body_scale > 0, the overlay is extended downward to cover head + upper body.
+        body_scale=4.0 means overlay extends 4× face-height below the face center.
         """
         if overlay_bgra is None or overlay_kps is None or not hasattr(target_face, 'kps'):
             return frame
@@ -132,12 +136,15 @@ class FaceSwapper:
             fh, fw = frame.shape[:2]
             dst_kps = np.array(target_face.kps, dtype=np.float32)
 
-            # Expand destination keypoints slightly outward from face center to fit full helmet/crown
-            if head_scale != 1.0:
-                center = np.mean(dst_kps, axis=0, keepdims=True)
-                dst_kps_scaled = center + (dst_kps - center) * head_scale
-            else:
-                dst_kps_scaled = dst_kps
+            # Reject occluded / extreme side-profile / back-of-head detections where eyes collapse
+            eye_dist = float(np.linalg.norm(dst_kps[1] - dst_kps[0]))
+            eye_mouth_dist = float(np.linalg.norm(((dst_kps[3] + dst_kps[4]) * 0.5) - ((dst_kps[0] + dst_kps[1]) * 0.5)))
+            if eye_dist < 8.0 or eye_mouth_dist < 8.0 or (eye_dist / max(eye_mouth_dist, 1.0)) < 0.35:
+                return frame
+
+            # Expand destination keypoints outward from face center to fit full helmet/crown
+            center = np.mean(dst_kps, axis=0, keepdims=True)
+            dst_kps_scaled = center + (dst_kps - center) * head_scale
 
             M, _ = cv2.estimateAffinePartial2D(overlay_kps, dst_kps_scaled, method=cv2.LMEDS)
             if M is None:
@@ -162,7 +169,7 @@ class FaceSwapper:
 
             fg_bgr = warped[:, :, :3]
 
-            # Subtle scene lighting match on the foreground mask
+            # Subtle scene lighting match on the foreground ROI only (avoiding black transparent border)
             if hasattr(target_face, 'bbox'):
                 x1, y1, x2, y2 = [int(v) for v in target_face.bbox]
                 x1, y1 = max(0, x1), max(0, y1)
@@ -171,8 +178,8 @@ class FaceSwapper:
                     target_roi = frame[y1:y2, x1:x2]
                     fg_roi = fg_bgr[y1:y2, x1:x2]
                     try:
-                        matched = reinhard_color_transfer(fg_bgr, target_roi)
-                        fg_bgr = cv2.addWeighted(fg_bgr, 0.78, matched, 0.22, 0)
+                        matched_roi = reinhard_color_transfer(fg_roi, target_roi)
+                        fg_bgr[y1:y2, x1:x2] = cv2.addWeighted(fg_roi, 0.78, matched_roi, 0.22, 0)
                     except Exception:
                         pass
 
@@ -231,10 +238,11 @@ class FaceSwapper:
                 return self.mask_overlay_swap(img, tgt_face, overlay_bgra, overlay_kps)
             return self.custom_blend_swap(img, tgt_face, source_face)
 
-        # Case 1: Explicit single character mode — swap every face in frame
+        # Case 1: Explicit single character mode — swap every valid face in frame
+        min_det = 0.42 if swap_mode == "mask_overlay" else 0.25
         if always_swap_if_single:
             for face in target_faces:
-                if face.det_score >= 0.15:
+                if face.det_score >= min_det:
                     result = _apply_swap(result, face)
                     swapped_bboxes.append(face.bbox)
                     self.last_target_bbox = face.bbox

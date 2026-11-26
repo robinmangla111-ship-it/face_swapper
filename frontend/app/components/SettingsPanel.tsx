@@ -5,6 +5,7 @@ import React, { useState } from "react";
 export interface SwapSettings {
   enhance: boolean;
   numWorkers: number | null;
+  falKey?: string;
 }
 
 interface SettingsPanelProps {
@@ -96,6 +97,25 @@ export default function SettingsPanel({ settings, onChange }: SettingsPanelProps
               />
               <span className="text-xs text-zinc-600">16</span>
             </div>
+          </div>
+
+          {/* Optional Cloud AI Key for Full-Body Character Diffusion */}
+          <div className="space-y-2 pt-2 border-t border-zinc-800/80">
+            <div>
+              <p className="text-sm font-medium text-zinc-200">
+                Cloud AI Key (Optional — for 🧍 Full-Body Diffusion)
+              </p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Paste a <span className="text-zinc-300">fal.ai</span> API key for photorealistic full-body character replacement (Wan-Animate). Leave blank for offline local CPU mode.
+              </p>
+            </div>
+            <input
+              type="password"
+              value={settings.falKey || ""}
+              onChange={(e) => onChange({ ...settings, falKey: e.target.value })}
+              placeholder="fal_..."
+              className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700/80 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-brand-500"
+            />
           </div>
         </div>
       )}
